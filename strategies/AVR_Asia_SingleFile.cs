@@ -13,7 +13,6 @@
 
 #region Using declarations
 using System;
-using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using NinjaTrader.Cbi;
 using NinjaTrader.Data;
@@ -1035,7 +1034,7 @@ private void RTM_SaveHWMIfNeeded(double equity)
 //== END ENTRY LOGIC (EDITABLE) ==
         }
 
-        protected override void OnExecutionUpdate(Execution execution, Order order)
+        protected override void OnExecutionUpdate(Execution execution, Order order) // corrected signature
         {
             RTM_OnExecutionUpdate(execution, order);
 
@@ -1056,7 +1055,7 @@ private void RTM_SaveHWMIfNeeded(double equity)
             }
         }
 
-        protected override void OnOrderUpdate(Order order)
+        protected override void OnOrderUpdate(Order order) // corrected signature
         {
             RTM_OnOrderUpdate(order);
 
