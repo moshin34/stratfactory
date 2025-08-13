@@ -1,0 +1,156 @@
+#region Diagnostics
+private string _stratName;
+private string _symbol;
+private string _accountName;
+private string _tf;
+private System.IO.StreamWriter _telemetry;
+private long _telemetryBytes;
+
+[NinjaScriptProperty]
+[Display(Name="VerboseLogging", GroupName="Diagnostics", Order=900)]
+public bool VerboseLogging { get; set; } = true;
+
+[NinjaScriptProperty]
+[Display(Name="WhyNoTrade", GroupName="Diagnostics", Order=901)]
+public bool WhyNoTrade { get; set; } = true;
+
+[NinjaScriptProperty]
+[Display(Name="EnableJsonTelemetry", GroupName="Diagnostics", Order=902)]
+public bool EnableJsonTelemetry { get; set; } = false;
+
+[NinjaScriptProperty]
+[Display(Name="TelemetryFilePath", GroupName="Diagnostics", Order=903)]
+public string TelemetryFilePath { get; set; } =
+    Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments)
+    + System.IO.Path.DirectorySeparatorChar + "NinjaTrader 8"
+    + System.IO.Path.DirectorySeparatorChar + "log"
+    + System.IO.Path.DirectorySeparatorChar + "StrategyLogs";
+
+[NinjaScriptProperty]
+[Display(Name="TelemetryMaxKB", GroupName="Diagnostics", Order=904)]
+[Range(64, 10240)]
+public int TelemetryMaxKB { get; set; } = 1024;
+
+private void Dx_Init()
+{
+    _stratName = Name;
+    _symbol = Instrument != null ? Instrument.FullName : "<unknown>";
+    _accountName = Account != null ? Account.Name : "<none>";
+    _tf = BarsPeriod.BarsPeriodType + ":" + BarsPeriod.Value;
+
+    if (EnableJsonTelemetry)
+    {
+        try
+        {
+            if (!System.IO.Directory.Exists(TelemetryFilePath))
+                System.IO.Directory.CreateDirectory(TelemetryFilePath);
+
+            var file = System.IO.Path.Combine(TelemetryFilePath, _stratName + ".jsonl");
+            _telemetry = new System.IO.StreamWriter(file, append: true);
+            _telemetry.AutoFlush = true;
+            _telemetryBytes = new System.IO.FileInfo(file).Exists ? new System.IO.FileInfo(file).Length : 0;
+            Dx_Cfg();
+        }
+        catch (Exception ex)
+        {
+            Print($"[CFG] [{_stratName}] telemetry=disabled error={ex.Message}");
+            EnableJsonTelemetry = false;
+        }
+    }
+
+    Print($"[CFG] [{_stratName}] symbol={_symbol} tf={_tf} risk={(UseRiskManager ? "on":"off")}");
+}
+
+private void Dx_Close()
+{
+    try { _telemetry?.Dispose(); } catch {}
+}
+
+private void Dx_Log(string tag, string kv)
+{
+    if (tag == "FILTER" && !WhyNoTrade) return;
+    if (!VerboseLogging && (tag == "CFG" || tag == "STATE" || tag == "FILTER" || tag == "ORD"))
+        return;
+    Print($"[{tag}] [{_stratName}] {kv}");
+    Dx_Json(tag, kv);
+}
+
+private void Dx_Cfg()
+{
+    if (!EnableJsonTelemetry) return;
+    var p = new System.Text.StringBuilder();
+    p.Append("{\"ts\":\"").Append(Times[0][0].ToUniversalTime().ToString("o"))
+     .Append("\",\"event\":\"CFG\",\"strat\":\"").Append(JsonEsc(_stratName))
+     .Append("\",\"symbol\":\"").Append(JsonEsc(_symbol))
+     .Append("\",\"tf\":\"").Append(JsonEsc(_tf))
+     .Append("\",\"account\":\"").Append(JsonEsc(_accountName))
+     .Append("\",\"params\":{")
+     .Append("\"UseRiskManager\":").Append(UseRiskManager.ToString().ToLower()).Append(",")
+     .Append("\"MaxDailyLoss\":").Append(MaxDailyLoss.ToString("F2")).Append(",")
+     .Append("\"CircuitBreakerDrawdown\":").Append(CircuitBreakerDrawdown.ToString("F2")).Append(",")
+     .Append("\"PropTrailingDD\":").Append(PropTrailingDD.ToString("F2")).Append(",")
+     .Append("\"LockoutMinutes\":").Append(LockoutMinutes)
+     .Append("}}");
+    Dx_WriteLine(p.ToString());
+}
+
+private void Dx_Json(string tag, string kv)
+{
+    if (!EnableJsonTelemetry) return;
+    var parts = kv.Split(new[]{' '}, StringSplitOptions.RemoveEmptyEntries);
+    var sb = new System.Text.StringBuilder();
+    sb.Append("{\"ts\":\"").Append(Times[0][0].ToUniversalTime().ToString("o"))
+      .Append("\",\"event\":\"").Append(JsonEsc(tag))
+      .Append("\",\"strat\":\"").Append(JsonEsc(_stratName))
+      .Append("\",\"symbol\":\"").Append(JsonEsc(_symbol))
+      .Append("\",\"tf\":\"").Append(JsonEsc(_tf))
+      .Append("\",\"account\":\"").Append(JsonEsc(_accountName))
+      .Append("\",\"ctx\":{");
+    int written = 0;
+    for (int i=0; i<parts.Length; i++)
+    {
+        var p = parts[i];
+        var eq = p.IndexOf('=');
+        if (eq <= 0) continue;
+        var k = p.Substring(0, eq);
+        var v = p.Substring(eq+1);
+        if (written++>0) sb.Append(",");
+        sb.Append("\"").Append(JsonEsc(k)).Append("\":\"").Append(JsonEsc(v)).Append("\"");
+    }
+    sb.Append("}}");
+    Dx_WriteLine(sb.ToString());
+}
+
+private void Dx_WriteLine(string line)
+{
+    try
+    {
+        if (_telemetry == null) return;
+        _telemetry.WriteLine(line);
+        _telemetryBytes += line.Length + 1;
+        var maxBytes = (long)TelemetryMaxKB * 1024L;
+        if (_telemetryBytes > maxBytes)
+        {
+            _telemetry.Dispose();
+            var path = System.IO.Path.Combine(TelemetryFilePath, _stratName + ".jsonl");
+            var rotated = System.IO.Path.Combine(TelemetryFilePath, _stratName + "." + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".jsonl");
+            System.IO.File.Move(path, rotated);
+            _telemetry = new System.IO.StreamWriter(path, append: true);
+            _telemetry.AutoFlush = true;
+            _telemetryBytes = 0;
+            Print($"[CFG] [{_stratName}] telemetry=rotated file={rotated}");
+        }
+    }
+    catch (Exception ex)
+    {
+        Print($"[CFG] [{_stratName}] telemetry=error msg={ex.Message}");
+        EnableJsonTelemetry = false;
+    }
+}
+
+private static string JsonEsc(string s)
+{
+    if (string.IsNullOrEmpty(s)) return "";
+    return s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n","\\n").Replace("\r","\\r");
+}
+#endregion

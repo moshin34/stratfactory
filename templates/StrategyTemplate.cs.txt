@@ -1,0 +1,609 @@
+// STRATEGY: <StrategyName>
+// VERSION: 1.0.0
+// CREATED: 2025-08-13
+// SESSION: <e.g., London 03:00–06:00 ET>
+// INSTRUMENTS: <e.g., MNQ, MES>
+// RISK: MaxDailyLoss=$700; CircuitBreaker=$2000; PropDD=$2500; LockoutMin=120
+// SPEC_REF: docs/STRATEGY_SPECS/<StrategyName>.md
+// NOTES: Single-file. Built-ins only. Namespace Standalone.Strategies. ENTRY-ONLY. 
+// Do NOT modify IMMUTABLE regions below. Only edit between ENTRY markers.
+
+using System;
+using System.ComponentModel.DataAnnotations;
+using NinjaTrader.NinjaScript;
+using NinjaTrader.Gui.NinjaScript;
+using NinjaTrader.NinjaScript.Strategies;
+using NinjaTrader.NinjaScript.Indicators;
+using NinjaTrader.Cbi;
+using NinjaTrader.Data;
+
+namespace Standalone.Strategies
+{
+    public class <StrategyName> : Strategy
+    {
+        #region Required Risk Toggles
+        [NinjaScriptProperty]
+        [Display(Name="UseRiskManager", GroupName="Risk", Order=1)]
+        public bool UseRiskManager { get; set; } = true;
+
+        [NinjaScriptProperty]
+        [Display(Name="MaxDailyLoss ($)", GroupName="Risk", Order=2)]
+        public double MaxDailyLoss { get; set; } = 700;
+
+        [NinjaScriptProperty]
+        [Display(Name="CircuitBreakerDrawdown ($)", GroupName="Risk", Order=3)]
+        public double CircuitBreakerDrawdown { get; set; } = 2000;
+
+        [NinjaScriptProperty]
+        [Display(Name="PropTrailingDD ($)", GroupName="Risk", Order=4)]
+        public double PropTrailingDD { get; set; } = 2500;
+
+        [NinjaScriptProperty]
+        [Display(Name="Lockout (min)", GroupName="Risk", Order=5)]
+        public int LockoutMinutes { get; set; } = 120;
+        #endregion
+
+//== BEGIN IMMUTABLE: DIAGNOSTICS ==
+#region Diagnostics
+private string _stratName;
+private string _symbol;
+private string _accountName;
+private string _tf;
+private System.IO.StreamWriter _telemetry;
+private long _telemetryBytes;
+
+[NinjaScriptProperty]
+[Display(Name="VerboseLogging", GroupName="Diagnostics", Order=900)]
+public bool VerboseLogging { get; set; } = true;
+
+[NinjaScriptProperty]
+[Display(Name="WhyNoTrade", GroupName="Diagnostics", Order=901)]
+public bool WhyNoTrade { get; set; } = true;
+
+[NinjaScriptProperty]
+[Display(Name="EnableJsonTelemetry", GroupName="Diagnostics", Order=902)]
+public bool EnableJsonTelemetry { get; set; } = false;
+
+[NinjaScriptProperty]
+[Display(Name="TelemetryFilePath", GroupName="Diagnostics", Order=903)]
+public string TelemetryFilePath { get; set; } =
+    Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments)
+    + System.IO.Path.DirectorySeparatorChar + "NinjaTrader 8"
+    + System.IO.Path.DirectorySeparatorChar + "log"
+    + System.IO.Path.DirectorySeparatorChar + "StrategyLogs";
+
+[NinjaScriptProperty]
+[Display(Name="TelemetryMaxKB", GroupName="Diagnostics", Order=904)]
+[Range(64, 10240)]
+public int TelemetryMaxKB { get; set; } = 1024;
+
+private void Dx_Init()
+{
+    _stratName = Name;
+    _symbol = Instrument != null ? Instrument.FullName : "<unknown>";
+    _accountName = Account != null ? Account.Name : "<none>";
+    _tf = BarsPeriod.BarsPeriodType + ":" + BarsPeriod.Value;
+
+    if (EnableJsonTelemetry)
+    {
+        try
+        {
+            if (!System.IO.Directory.Exists(TelemetryFilePath))
+                System.IO.Directory.CreateDirectory(TelemetryFilePath);
+
+            var file = System.IO.Path.Combine(TelemetryFilePath, _stratName + ".jsonl");
+            _telemetry = new System.IO.StreamWriter(file, append: true);
+            _telemetry.AutoFlush = true;
+            _telemetryBytes = new System.IO.FileInfo(file).Exists ? new System.IO.FileInfo(file).Length : 0;
+            Dx_Cfg();
+        }
+        catch (Exception ex)
+        {
+            Print($"[CFG] [{_stratName}] telemetry=disabled error={ex.Message}");
+            EnableJsonTelemetry = false;
+        }
+    }
+
+    Print($"[CFG] [{_stratName}] symbol={_symbol} tf={_tf} risk={(UseRiskManager ? "on":"off")}");
+}
+
+private void Dx_Close()
+{
+    try { _telemetry?.Dispose(); } catch {}
+}
+
+private void Dx_Log(string tag, string kv)
+{
+    if (tag == "FILTER" && !WhyNoTrade) return;
+    if (!VerboseLogging && (tag == "CFG" || tag == "STATE" || tag == "FILTER" || tag == "ORD"))
+        return;
+    Print($"[{tag}] [{_stratName}] {kv}");
+    Dx_Json(tag, kv);
+}
+
+private void Dx_Cfg()
+{
+    if (!EnableJsonTelemetry) return;
+    var p = new System.Text.StringBuilder();
+    p.Append("{\"ts\":\"").Append(Times[0][0].ToUniversalTime().ToString("o"))
+     .Append("\",\"event\":\"CFG\",\"strat\":\"").Append(JsonEsc(_stratName))
+     .Append("\",\"symbol\":\"").Append(JsonEsc(_symbol))
+     .Append("\",\"tf\":\"").Append(JsonEsc(_tf))
+     .Append("\",\"account\":\"").Append(JsonEsc(_accountName))
+     .Append("\",\"params\":{")
+     .Append("\"UseRiskManager\":").Append(UseRiskManager.ToString().ToLower()).Append(",")
+     .Append("\"MaxDailyLoss\":").Append(MaxDailyLoss.ToString("F2")).Append(",")
+     .Append("\"CircuitBreakerDrawdown\":").Append(CircuitBreakerDrawdown.ToString("F2")).Append(",")
+     .Append("\"PropTrailingDD\":").Append(PropTrailingDD.ToString("F2")).Append(",")
+     .Append("\"LockoutMinutes\":").Append(LockoutMinutes)
+     .Append("}}");
+    Dx_WriteLine(p.ToString());
+}
+
+private void Dx_Json(string tag, string kv)
+{
+    if (!EnableJsonTelemetry) return;
+    var parts = kv.Split(new[]{' '}, StringSplitOptions.RemoveEmptyEntries);
+    var sb = new System.Text.StringBuilder();
+    sb.Append("{\"ts\":\"").Append(Times[0][0].ToUniversalTime().ToString("o"))
+      .Append("\",\"event\":\"").Append(JsonEsc(tag))
+      .Append("\",\"strat\":\"").Append(JsonEsc(_stratName))
+      .Append("\",\"symbol\":\"").Append(JsonEsc(_symbol))
+      .Append("\",\"tf\":\"").Append(JsonEsc(_tf))
+      .Append("\",\"account\":\"").Append(JsonEsc(_accountName))
+      .Append("\",\"ctx\":{");
+    int written = 0;
+    for (int i=0; i<parts.Length; i++)
+    {
+        var p = parts[i];
+        var eq = p.IndexOf('=');
+        if (eq <= 0) continue;
+        var k = p.Substring(0, eq);
+        var v = p.Substring(eq+1);
+        if (written++>0) sb.Append(",");
+        sb.Append("\"").Append(JsonEsc(k)).Append("\":\"").Append(JsonEsc(v)).Append("\"");
+    }
+    sb.Append("}}");
+    Dx_WriteLine(sb.ToString());
+}
+
+private void Dx_WriteLine(string line)
+{
+    try
+    {
+        if (_telemetry == null) return;
+        _telemetry.WriteLine(line);
+        _telemetryBytes += line.Length + 1;
+        var maxBytes = (long)TelemetryMaxKB * 1024L;
+        if (_telemetryBytes > maxBytes)
+        {
+            _telemetry.Dispose();
+            var path = System.IO.Path.Combine(TelemetryFilePath, _stratName + ".jsonl");
+            var rotated = System.IO.Path.Combine(TelemetryFilePath, _stratName + "." + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".jsonl");
+            System.IO.File.Move(path, rotated);
+            _telemetry = new System.IO.StreamWriter(path, append: true);
+            _telemetry.AutoFlush = true;
+            _telemetryBytes = 0;
+            Print($"[CFG] [{_stratName}] telemetry=rotated file={rotated}");
+        }
+    }
+    catch (Exception ex)
+    {
+        Print($"[CFG] [{_stratName}] telemetry=error msg={ex.Message}");
+        EnableJsonTelemetry = false;
+    }
+}
+
+private static string JsonEsc(string s)
+{
+    if (string.IsNullOrEmpty(s)) return "";
+    return s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n","\\n").Replace("\r","\\r");
+}
+#endregion
+
+//== END IMMUTABLE: DIAGNOSTICS ==
+
+//== BEGIN IMMUTABLE: RTM ==
+#region Risk Profiles, Sizing, Exits (UI)
+public enum RiskProfile { ECP, PCP, DCP, HR }
+public enum PositionSizingMode { FixedContracts, PercentEquityRisk, MaxLossPerTrade }
+public enum EntryRiskMode { StopTicks, ATRx }
+public enum TrailType { Ticks, ATRx }
+
+[NinjaScriptProperty]
+[Display(Name="RiskProfile", GroupName="Risk", Order=10)]
+public RiskProfile RiskProfileMode { get; set; } = RiskProfile.DCP;
+
+[NinjaScriptProperty]
+[Display(Name="PositionSizingMode", GroupName="Risk", Order=11)]
+public PositionSizingMode SizingMode { get; set; } = PositionSizingMode.FixedContracts;
+
+[NinjaScriptProperty]
+[Display(Name="DefaultQuantity", GroupName="Risk", Order=12)]
+[Range(1, 100)]
+public int DefaultQuantity { get; set; } = 1;
+
+[NinjaScriptProperty]
+[Display(Name="AccountEquityEstimate ($)", GroupName="Risk", Order=13)]
+[Range(0, double.MaxValue)]
+public double AccountEquityEstimate { get; set; } = 50000;
+
+[NinjaScriptProperty]
+[Display(Name="RiskPerTrade ($)", GroupName="Risk", Order=14)]
+[Range(10, 100000)]
+public double RiskPerTrade { get; set; } = 250;
+
+[NinjaScriptProperty]
+[Display(Name="EntryRiskMode", GroupName="Risk", Order=15)]
+public EntryRiskMode EntryRisk { get; set; } = EntryRiskMode.StopTicks;
+
+[NinjaScriptProperty]
+[Display(Name="Stop (ticks)", GroupName="Risk", Order=16)]
+[Range(1, 500)]
+public int StopTicks { get; set; } = 40;
+
+[NinjaScriptProperty]
+[Display(Name="ATR Period", GroupName="Risk", Order=17)]
+[Range(5, 200)]
+public int ATRPeriod { get; set; } = 14;
+
+[NinjaScriptProperty]
+[Display(Name="ATR Mult (x)", GroupName="Risk", Order=18)]
+[Range(0.1, 20)]
+public double ATRMult { get; set; } = 1.0;
+
+[NinjaScriptProperty]
+[Display(Name="BE at R (x)", GroupName="Exits", Order=30)]
+[Range(0.0, 10.0)]
+public double BreakEvenAtR { get; set; } = 1.0;
+
+[NinjaScriptProperty]
+[Display(Name="BE Plus (ticks)", GroupName="Exits", Order=31)]
+[Range(0, 50)]
+public int BEPlusTicks { get; set; } = 0;
+
+[NinjaScriptProperty]
+[Display(Name="TP1 @ R (x)", GroupName="Exits", Order=32)]
+[Range(0.1, 20)]
+public double TP1_RMultiple { get; set; } = 1.0;
+
+[NinjaScriptProperty]
+[Display(Name="TP1 %", GroupName="Exits", Order=33)]
+[Range(0, 100)]
+public int TP1_Pct { get; set; } = 50;
+
+[NinjaScriptProperty]
+[Display(Name="TP2 @ R (x)", GroupName="Exits", Order=34)]
+[Range(0.1, 20)]
+public double TP2_RMultiple { get; set; } = 2.0;
+
+[NinjaScriptProperty]
+[Display(Name="TP2 %", GroupName="Exits", Order=35)]
+[Range(0, 100)]
+public int TP2_Pct { get; set; } = 25;
+
+[NinjaScriptProperty]
+[Display(Name="Trail Start @ R (x)", GroupName="Exits", Order=36)]
+[Range(0.0, 20)]
+public double TP3_TrailingStartR { get; set; } = 2.0;
+
+[NinjaScriptProperty]
+[Display(Name="TP3 % (Trail)", GroupName="Exits", Order=37)]
+[Range(0, 100)]
+public int TP3_Pct { get; set; } = 25;
+
+[NinjaScriptProperty]
+[Display(Name="Trail Type", GroupName="Exits", Order=38)]
+public TrailType TrailMode { get; set; } = TrailType.Ticks;
+
+[NinjaScriptProperty]
+[Display(Name="Trail (ticks)", GroupName="Exits", Order=39)]
+[Range(1, 500)]
+public int TrailTicks { get; set; } = 30;
+
+[NinjaScriptProperty]
+[Display(Name="Trail ATR Mult (x)", GroupName="Exits", Order=40)]
+[Range(0.1, 20)]
+public double TrailATRMult { get; set; } = 1.0;
+#endregion
+
+#region RTM Internals
+private string _entrySignal = "ENTRY";
+private string _tp1Signal = "TP1";
+private string _tp2Signal = "TP2";
+private string _trailSignal = "TRAIL";
+
+private double _avgEntry;
+private double _initStop;
+private int _rticks;
+private int _tp1Qty;
+private int _tp2Qty;
+private int _trailQty;
+private bool _beMoved;
+private bool _trailArmed;
+
+private NinjaTrader.NinjaScript.Indicators.ATR _atr;
+#endregion
+
+#region RTM Life-cycle Hooks
+private void RTM_OnStateChange()
+{
+    if (State == State.SetDefaults)
+    {
+        // defaults declared in properties
+    }
+    else if (State == State.Configure)
+    {
+        if (_atr == null) _atr = ATR(ATRPeriod);
+    }
+    else if (State == State.DataLoaded)
+    {
+        int sum = TP1_Pct + TP2_Pct + TP3_Pct;
+        if (sum <= 0) { TP1_Pct = 50; TP2_Pct = 25; TP3_Pct = 25; sum = 100; }
+        if (sum != 100)
+        {
+            double f = 100.0 / sum;
+            TP1_Pct = Math.Max(0, (int)Math.Round(TP1_Pct * f));
+            TP2_Pct = Math.Max(0, (int)Math.Round(TP2_Pct * f));
+            TP3_Pct = 100 - TP1_Pct - TP2_Pct;
+            Print($"[CFG] [{Name}] normalized TP pct: {TP1_Pct}/{TP2_Pct}/{TP3_Pct}");
+        }
+    }
+}
+#endregion
+
+#region RTM Entry Arming API
+private int RTM_ComputeQty(double entryPrice, double stopPrice)
+{
+    int q = DefaultQuantity;
+    try
+    {
+        double equity = Account != null
+            ? Account.Get(AccountItem.NetLiquidation, Currency.UsDollar)
+            : AccountEquityEstimate;
+        if (equity <= 0) equity = AccountEquityEstimate;
+
+        double riskPerContract = Math.Abs(entryPrice - stopPrice) / TickSize * Instrument.MasterInstrument.PointValue * TickSize;
+        if (riskPerContract <= 0) return Math.Max(1, DefaultQuantity);
+
+        if (SizingMode == PositionSizingMode.FixedContracts)
+            q = DefaultQuantity;
+        else if (SizingMode == PositionSizingMode.PercentEquityRisk)
+            q = (int)Math.Floor((equity * (RiskPerTrade / 100.0)) / riskPerContract);
+        else if (SizingMode == PositionSizingMode.MaxLossPerTrade)
+            q = (int)Math.Floor(RiskPerTrade / riskPerContract);
+
+        q = Math.Max(1, q);
+    }
+    catch { q = Math.Max(1, DefaultQuantity); }
+    return q;
+}
+
+public void RTM_ArmEntryLong(double plannedEntryPrice)
+{
+    double stop = (EntryRisk == EntryRiskMode.ATRx)
+        ? plannedEntryPrice - (_atr[0] * ATRMult)
+        : plannedEntryPrice - (StopTicks * TickSize);
+    RTM_Prime(plannedEntryPrice, stop, true);
+}
+
+public void RTM_ArmEntryShort(double plannedEntryPrice)
+{
+    double stop = (EntryRisk == EntryRiskMode.ATRx)
+        ? plannedEntryPrice + (_atr[0] * ATRMult)
+        : plannedEntryPrice + (StopTicks * TickSize);
+    RTM_Prime(plannedEntryPrice, stop, false);
+}
+
+private void RTM_Prime(double entry, double stop, bool isLong)
+{
+    _avgEntry = entry;
+    _initStop = stop;
+    _rticks = (int)Math.Max(1, Math.Round(Math.Abs(entry - stop) / TickSize));
+
+    int qty = RTM_ComputeQty(entry, stop);
+    _tp1Qty = (int)Math.Max(0, Math.Round(qty * (TP1_Pct / 100.0)));
+    _tp2Qty = (int)Math.Max(0, Math.Round(qty * (TP2_Pct / 100.0)));
+    _trailQty = Math.Max(0, qty - _tp1Qty - _tp2Qty);
+    if (_tp1Qty + _tp2Qty + _trailQty != qty) _trailQty = Math.Max(0, qty - _tp1Qty - _tp2Qty);
+
+    _beMoved = false;
+    _trailArmed = false;
+
+    Print($"[ENTRY] [{Name}] side={(isLong ? "Long":"Short")} price={entry:F2} qty={qty} RTicks={_rticks}");
+
+    if (isLong) EnterLong(qty, _entrySignal);
+    else EnterShort(qty, _entrySignal);
+}
+#endregion
+
+#region RTM Runtime Management
+private void RTM_OnBarUpdate()
+{
+    if (CurrentBar < 5) return;
+
+    if (!_beMoved && Position.MarketPosition != MarketPosition.Flat && _rticks > 0)
+    {
+        double rNowTicks = Position.MarketPosition == MarketPosition.Long
+            ? (Close[0] - _avgEntry) / TickSize
+            : (_avgEntry - Close[0]) / TickSize;
+
+        if (rNowTicks >= BreakEvenAtR * _rticks)
+        {
+            double bePrice = _avgEntry + (Position.MarketPosition == MarketPosition.Long ? BEPlusTicks * TickSize : -BEPlusTicks * TickSize);
+            RTM_UpdateStop(bePrice);
+            _beMoved = true;
+            Print($"[EXIT] [{Name}] reason=BEMove stop={bePrice:F2} rNowTicks={rNowTicks:F1}");
+        }
+    }
+
+    if (Position.MarketPosition != MarketPosition.Flat && !_trailArmed && _rticks > 0)
+    {
+        double rNowTicks = Position.MarketPosition == MarketPosition.Long
+            ? (Close[0] - _avgEntry) / TickSize
+            : (_avgEntry - Close[0]) / TickSize;
+
+        if (rNowTicks >= TP3_TrailingStartR * _rticks)
+            _trailArmed = true;
+    }
+
+    if (Position.MarketPosition != MarketPosition.Flat && _trailArmed)
+    {
+        double newStop;
+        if (TrailMode == TrailType.Ticks)
+        {
+            if (Position.MarketPosition == MarketPosition.Long)
+                newStop = Close[0] - TrailTicks * TickSize;
+            else
+                newStop = Close[0] + TrailTicks * TickSize;
+        }
+        else
+        {
+            double offs = _atr[0] * TrailATRMult;
+            newStop = Position.MarketPosition == MarketPosition.Long ? Close[0] - offs : Close[0] + offs;
+        }
+
+        if (Position.MarketPosition == MarketPosition.Long)
+        {
+            if (newStop > _initStop) { _initStop = newStop; RTM_UpdateStop(_initStop); Print($"[EXIT] [{Name}] reason=TrailUpdate stop={_initStop:F2}"); }
+        }
+        else
+        {
+            if (newStop < _initStop) { _initStop = newStop; RTM_UpdateStop(_initStop); Print($"[EXIT] [{Name}] reason=TrailUpdate stop={_initStop:F2}"); }
+        }
+    }
+}
+
+private void RTM_OnOrderUpdate(Order order) { }
+
+private void RTM_OnExecutionUpdate(Execution execution, Order order)
+{
+    if (execution == null || order == null) return;
+
+    if (order.FromEntrySignal == _entrySignal && order.OrderState == OrderState.Filled)
+    {
+        _avgEntry = execution.Price;
+
+        RTM_UpdateStop(_initStop);
+
+        double tp1Price, tp2Price;
+        if (Position.MarketPosition == MarketPosition.Long)
+        {
+            tp1Price = _avgEntry + TP1_RMultiple * _rticks * TickSize;
+            tp2Price = _avgEntry + TP2_RMultiple * _rticks * TickSize;
+        }
+        else
+        {
+            tp1Price = _avgEntry - TP1_RMultiple * _rticks * TickSize;
+            tp2Price = _avgEntry - TP2_RMultiple * _rticks * TickSize;
+        }
+
+        if (_tp1Qty > 0) ExitFromPositionLimit(_tp1Qty, tp1Price, _tp1Signal);
+        if (_tp2Qty > 0) ExitFromPositionLimit(_tp2Qty, tp2Price, _tp2Signal);
+    }
+}
+#endregion
+
+#region RTM Helpers
+private void RTM_UpdateStop(double price)
+{
+    SetStopLoss(_entrySignal, CalculationMode.Price, price, false);
+}
+
+private void ExitFromPositionLimit(int qty, double price, string signalName)
+{
+    if (Position.MarketPosition == MarketPosition.Long)
+        ExitLongLimit(qty, price, signalName, _entrySignal);
+    else if (Position.MarketPosition == MarketPosition.Short)
+        ExitShortLimit(qty, price, signalName, _entrySignal);
+}
+#endregion
+
+//== END IMMUTABLE: RTM ==
+
+        #region Entry Parameters
+        [NinjaScriptProperty]
+        [Display(Name="EnableEntries", GroupName="Entry", Order=100)]
+        public bool EnableEntries { get; set; } = true;
+        // Add entry parameters here as needed
+        #endregion
+
+        private DateTime sessionDate;
+        private double highWaterMark;
+        private DateTime lockoutUntil = DateTime.MinValue;
+
+        protected override void OnStateChange()
+        {
+            if (State == State.SetDefaults)
+            {
+                Name = "<StrategyName>";
+                Calculate = Calculate.OnBarClose;
+                EntriesPerDirection = 1;
+                EntryHandling = EntryHandling.AllEntries;
+                IsUnmanaged = false;
+                IsInstantiatedOnEachOptimizationIteration = false;
+            }
+            else if (State == State.Configure)
+            {
+                RTM_OnStateChange();
+                Dx_Init();
+            }
+            else if (State == State.Terminated)
+            {
+                Dx_Close();
+            }
+        }
+
+        protected override void OnBarUpdate()
+        {
+            if (CurrentBar < 5) return;
+
+            // Day rollover & HWM
+            if (Times[0][0].Date != sessionDate.Date)
+            {
+                sessionDate = Times[0][0].Date;
+                highWaterMark = Account != null ? Account.Get(AccountItem.NetLiquidation, Currency.UsDollar) : 0;
+            }
+
+            // CircuitBreaker / PropDD
+            if (UseRiskManager && Account != null)
+            {
+                var equity = Account.Get(AccountItem.NetLiquidation, Currency.UsDollar);
+                if (equity > highWaterMark) highWaterMark = equity;
+                var draw = highWaterMark - equity;
+                if (draw >= PropTrailingDD || draw >= CircuitBreakerDrawdown)
+                {
+                    if (Position.MarketPosition == MarketPosition.Long) ExitLong();
+                    if (Position.MarketPosition == MarketPosition.Short) ExitShort();
+                    lockoutUntil = Time[0].AddMinutes(LockoutMinutes);
+                    Print($"[RISK] [{Name}] type={(draw >= PropTrailingDD ? "PropDD" : "CircuitBreaker")} draw={draw:F2} HWM={highWaterMark:F2} equity={equity:F2}");
+                    return;
+                }
+            }
+
+            if (Time[0] < lockoutUntil) return;
+
+            // Always run RTM manager (BE/TP/Trail)
+            RTM_OnBarUpdate();
+
+            if (!EnableEntries) return;
+
+//== BEGIN ENTRY LOGIC (EDITABLE) ==
+// Codex: implement entry-only logic here.
+// Example (replace):
+// if (CrossAbove(EMA(9), EMA(21), 1)) RTM_ArmEntryLong(Close[0]);
+// if (CrossBelow(EMA(9), EMA(21), 1)) RTM_ArmEntryShort(Close[0]);
+//== END ENTRY LOGIC (EDITABLE) ==
+        }
+
+        protected override void OnExecutionUpdate(Execution execution, Order order)
+        {
+            RTM_OnExecutionUpdate(execution, order);
+        }
+
+        protected override void OnOrderUpdate(Order order)
+        {
+            RTM_OnOrderUpdate(order);
+        }
+    }
+}

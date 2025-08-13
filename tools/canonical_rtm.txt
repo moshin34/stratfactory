@@ -1,0 +1,314 @@
+#region Risk Profiles, Sizing, Exits (UI)
+public enum RiskProfile { ECP, PCP, DCP, HR }
+public enum PositionSizingMode { FixedContracts, PercentEquityRisk, MaxLossPerTrade }
+public enum EntryRiskMode { StopTicks, ATRx }
+public enum TrailType { Ticks, ATRx }
+
+[NinjaScriptProperty]
+[Display(Name="RiskProfile", GroupName="Risk", Order=10)]
+public RiskProfile RiskProfileMode { get; set; } = RiskProfile.DCP;
+
+[NinjaScriptProperty]
+[Display(Name="PositionSizingMode", GroupName="Risk", Order=11)]
+public PositionSizingMode SizingMode { get; set; } = PositionSizingMode.FixedContracts;
+
+[NinjaScriptProperty]
+[Display(Name="DefaultQuantity", GroupName="Risk", Order=12)]
+[Range(1, 100)]
+public int DefaultQuantity { get; set; } = 1;
+
+[NinjaScriptProperty]
+[Display(Name="AccountEquityEstimate ($)", GroupName="Risk", Order=13)]
+[Range(0, double.MaxValue)]
+public double AccountEquityEstimate { get; set; } = 50000;
+
+[NinjaScriptProperty]
+[Display(Name="RiskPerTrade ($)", GroupName="Risk", Order=14)]
+[Range(10, 100000)]
+public double RiskPerTrade { get; set; } = 250;
+
+[NinjaScriptProperty]
+[Display(Name="EntryRiskMode", GroupName="Risk", Order=15)]
+public EntryRiskMode EntryRisk { get; set; } = EntryRiskMode.StopTicks;
+
+[NinjaScriptProperty]
+[Display(Name="Stop (ticks)", GroupName="Risk", Order=16)]
+[Range(1, 500)]
+public int StopTicks { get; set; } = 40;
+
+[NinjaScriptProperty]
+[Display(Name="ATR Period", GroupName="Risk", Order=17)]
+[Range(5, 200)]
+public int ATRPeriod { get; set; } = 14;
+
+[NinjaScriptProperty]
+[Display(Name="ATR Mult (x)", GroupName="Risk", Order=18)]
+[Range(0.1, 20)]
+public double ATRMult { get; set; } = 1.0;
+
+[NinjaScriptProperty]
+[Display(Name="BE at R (x)", GroupName="Exits", Order=30)]
+[Range(0.0, 10.0)]
+public double BreakEvenAtR { get; set; } = 1.0;
+
+[NinjaScriptProperty]
+[Display(Name="BE Plus (ticks)", GroupName="Exits", Order=31)]
+[Range(0, 50)]
+public int BEPlusTicks { get; set; } = 0;
+
+[NinjaScriptProperty]
+[Display(Name="TP1 @ R (x)", GroupName="Exits", Order=32)]
+[Range(0.1, 20)]
+public double TP1_RMultiple { get; set; } = 1.0;
+
+[NinjaScriptProperty]
+[Display(Name="TP1 %", GroupName="Exits", Order=33)]
+[Range(0, 100)]
+public int TP1_Pct { get; set; } = 50;
+
+[NinjaScriptProperty]
+[Display(Name="TP2 @ R (x)", GroupName="Exits", Order=34)]
+[Range(0.1, 20)]
+public double TP2_RMultiple { get; set; } = 2.0;
+
+[NinjaScriptProperty]
+[Display(Name="TP2 %", GroupName="Exits", Order=35)]
+[Range(0, 100)]
+public int TP2_Pct { get; set; } = 25;
+
+[NinjaScriptProperty]
+[Display(Name="Trail Start @ R (x)", GroupName="Exits", Order=36)]
+[Range(0.0, 20)]
+public double TP3_TrailingStartR { get; set; } = 2.0;
+
+[NinjaScriptProperty]
+[Display(Name="TP3 % (Trail)", GroupName="Exits", Order=37)]
+[Range(0, 100)]
+public int TP3_Pct { get; set; } = 25;
+
+[NinjaScriptProperty]
+[Display(Name="Trail Type", GroupName="Exits", Order=38)]
+public TrailType TrailMode { get; set; } = TrailType.Ticks;
+
+[NinjaScriptProperty]
+[Display(Name="Trail (ticks)", GroupName="Exits", Order=39)]
+[Range(1, 500)]
+public int TrailTicks { get; set; } = 30;
+
+[NinjaScriptProperty]
+[Display(Name="Trail ATR Mult (x)", GroupName="Exits", Order=40)]
+[Range(0.1, 20)]
+public double TrailATRMult { get; set; } = 1.0;
+#endregion
+
+#region RTM Internals
+private string _entrySignal = "ENTRY";
+private string _tp1Signal = "TP1";
+private string _tp2Signal = "TP2";
+private string _trailSignal = "TRAIL";
+
+private double _avgEntry;
+private double _initStop;
+private int _rticks;
+private int _tp1Qty;
+private int _tp2Qty;
+private int _trailQty;
+private bool _beMoved;
+private bool _trailArmed;
+
+private NinjaTrader.NinjaScript.Indicators.ATR _atr;
+#endregion
+
+#region RTM Life-cycle Hooks
+private void RTM_OnStateChange()
+{
+    if (State == State.SetDefaults)
+    {
+        // defaults declared in properties
+    }
+    else if (State == State.Configure)
+    {
+        if (_atr == null) _atr = ATR(ATRPeriod);
+    }
+    else if (State == State.DataLoaded)
+    {
+        int sum = TP1_Pct + TP2_Pct + TP3_Pct;
+        if (sum <= 0) { TP1_Pct = 50; TP2_Pct = 25; TP3_Pct = 25; sum = 100; }
+        if (sum != 100)
+        {
+            double f = 100.0 / sum;
+            TP1_Pct = Math.Max(0, (int)Math.Round(TP1_Pct * f));
+            TP2_Pct = Math.Max(0, (int)Math.Round(TP2_Pct * f));
+            TP3_Pct = 100 - TP1_Pct - TP2_Pct;
+            Print($"[CFG] [{Name}] normalized TP pct: {TP1_Pct}/{TP2_Pct}/{TP3_Pct}");
+        }
+    }
+}
+#endregion
+
+#region RTM Entry Arming API
+private int RTM_ComputeQty(double entryPrice, double stopPrice)
+{
+    int q = DefaultQuantity;
+    try
+    {
+        double equity = Account != null
+            ? Account.Get(AccountItem.NetLiquidation, Currency.UsDollar)
+            : AccountEquityEstimate;
+        if (equity <= 0) equity = AccountEquityEstimate;
+
+        double riskPerContract = Math.Abs(entryPrice - stopPrice) / TickSize * Instrument.MasterInstrument.PointValue * TickSize;
+        if (riskPerContract <= 0) return Math.Max(1, DefaultQuantity);
+
+        if (SizingMode == PositionSizingMode.FixedContracts)
+            q = DefaultQuantity;
+        else if (SizingMode == PositionSizingMode.PercentEquityRisk)
+            q = (int)Math.Floor((equity * (RiskPerTrade / 100.0)) / riskPerContract);
+        else if (SizingMode == PositionSizingMode.MaxLossPerTrade)
+            q = (int)Math.Floor(RiskPerTrade / riskPerContract);
+
+        q = Math.Max(1, q);
+    }
+    catch { q = Math.Max(1, DefaultQuantity); }
+    return q;
+}
+
+public void RTM_ArmEntryLong(double plannedEntryPrice)
+{
+    double stop = (EntryRisk == EntryRiskMode.ATRx)
+        ? plannedEntryPrice - (_atr[0] * ATRMult)
+        : plannedEntryPrice - (StopTicks * TickSize);
+    RTM_Prime(plannedEntryPrice, stop, true);
+}
+
+public void RTM_ArmEntryShort(double plannedEntryPrice)
+{
+    double stop = (EntryRisk == EntryRiskMode.ATRx)
+        ? plannedEntryPrice + (_atr[0] * ATRMult)
+        : plannedEntryPrice + (StopTicks * TickSize);
+    RTM_Prime(plannedEntryPrice, stop, false);
+}
+
+private void RTM_Prime(double entry, double stop, bool isLong)
+{
+    _avgEntry = entry;
+    _initStop = stop;
+    _rticks = (int)Math.Max(1, Math.Round(Math.Abs(entry - stop) / TickSize));
+
+    int qty = RTM_ComputeQty(entry, stop);
+    _tp1Qty = (int)Math.Max(0, Math.Round(qty * (TP1_Pct / 100.0)));
+    _tp2Qty = (int)Math.Max(0, Math.Round(qty * (TP2_Pct / 100.0)));
+    _trailQty = Math.Max(0, qty - _tp1Qty - _tp2Qty);
+    if (_tp1Qty + _tp2Qty + _trailQty != qty) _trailQty = Math.Max(0, qty - _tp1Qty - _tp2Qty);
+
+    _beMoved = false;
+    _trailArmed = false;
+
+    Print($"[ENTRY] [{Name}] side={(isLong ? "Long":"Short")} price={entry:F2} qty={qty} RTicks={_rticks}");
+
+    if (isLong) EnterLong(qty, _entrySignal);
+    else EnterShort(qty, _entrySignal);
+}
+#endregion
+
+#region RTM Runtime Management
+private void RTM_OnBarUpdate()
+{
+    if (CurrentBar < 5) return;
+
+    if (!_beMoved && Position.MarketPosition != MarketPosition.Flat && _rticks > 0)
+    {
+        double rNowTicks = Position.MarketPosition == MarketPosition.Long
+            ? (Close[0] - _avgEntry) / TickSize
+            : (_avgEntry - Close[0]) / TickSize;
+
+        if (rNowTicks >= BreakEvenAtR * _rticks)
+        {
+            double bePrice = _avgEntry + (Position.MarketPosition == MarketPosition.Long ? BEPlusTicks * TickSize : -BEPlusTicks * TickSize);
+            RTM_UpdateStop(bePrice);
+            _beMoved = true;
+            Print($"[EXIT] [{Name}] reason=BEMove stop={bePrice:F2} rNowTicks={rNowTicks:F1}");
+        }
+    }
+
+    if (Position.MarketPosition != MarketPosition.Flat && !_trailArmed && _rticks > 0)
+    {
+        double rNowTicks = Position.MarketPosition == MarketPosition.Long
+            ? (Close[0] - _avgEntry) / TickSize
+            : (_avgEntry - Close[0]) / TickSize;
+
+        if (rNowTicks >= TP3_TrailingStartR * _rticks)
+            _trailArmed = true;
+    }
+
+    if (Position.MarketPosition != MarketPosition.Flat && _trailArmed)
+    {
+        double newStop;
+        if (TrailMode == TrailType.Ticks)
+        {
+            if (Position.MarketPosition == MarketPosition.Long)
+                newStop = Close[0] - TrailTicks * TickSize;
+            else
+                newStop = Close[0] + TrailTicks * TickSize;
+        }
+        else
+        {
+            double offs = _atr[0] * TrailATRMult;
+            newStop = Position.MarketPosition == MarketPosition.Long ? Close[0] - offs : Close[0] + offs;
+        }
+
+        if (Position.MarketPosition == MarketPosition.Long)
+        {
+            if (newStop > _initStop) { _initStop = newStop; RTM_UpdateStop(_initStop); Print($"[EXIT] [{Name}] reason=TrailUpdate stop={_initStop:F2}"); }
+        }
+        else
+        {
+            if (newStop < _initStop) { _initStop = newStop; RTM_UpdateStop(_initStop); Print($"[EXIT] [{Name}] reason=TrailUpdate stop={_initStop:F2}"); }
+        }
+    }
+}
+
+private void RTM_OnOrderUpdate(Order order) { }
+
+private void RTM_OnExecutionUpdate(Execution execution, Order order)
+{
+    if (execution == null || order == null) return;
+
+    if (order.FromEntrySignal == _entrySignal && order.OrderState == OrderState.Filled)
+    {
+        _avgEntry = execution.Price;
+
+        RTM_UpdateStop(_initStop);
+
+        double tp1Price, tp2Price;
+        if (Position.MarketPosition == MarketPosition.Long)
+        {
+            tp1Price = _avgEntry + TP1_RMultiple * _rticks * TickSize;
+            tp2Price = _avgEntry + TP2_RMultiple * _rticks * TickSize;
+        }
+        else
+        {
+            tp1Price = _avgEntry - TP1_RMultiple * _rticks * TickSize;
+            tp2Price = _avgEntry - TP2_RMultiple * _rticks * TickSize;
+        }
+
+        if (_tp1Qty > 0) ExitFromPositionLimit(_tp1Qty, tp1Price, _tp1Signal);
+        if (_tp2Qty > 0) ExitFromPositionLimit(_tp2Qty, tp2Price, _tp2Signal);
+    }
+}
+#endregion
+
+#region RTM Helpers
+private void RTM_UpdateStop(double price)
+{
+    SetStopLoss(_entrySignal, CalculationMode.Price, price, false);
+}
+
+private void ExitFromPositionLimit(int qty, double price, string signalName)
+{
+    if (Position.MarketPosition == MarketPosition.Long)
+        ExitLongLimit(qty, price, signalName, _entrySignal);
+    else if (Position.MarketPosition == MarketPosition.Short)
+        ExitShortLimit(qty, price, signalName, _entrySignal);
+}
+#endregion
