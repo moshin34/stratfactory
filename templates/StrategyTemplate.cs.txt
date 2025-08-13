@@ -1,12 +1,15 @@
-// STRATEGY TEMPLATE (v1.1) — Persistent HWM, Cutoff/AutoFlat, Rejection/Disconnect Failsafes
+// STRATEGY TEMPLATE (v1.3) — PER-ACCOUNT ONLY HWM (immutable), Cutoff/AutoFlat, Failsafes
 // CREATED: 2025-08-13
-// Notes:
-// - Single file, standalone; DIAGNOSTICS + RTM regions are IMMUTABLE (guarded by CI).
-// - Codex edits ONLY the ENTRY block between markers.
-// - Target: NinjaTrader 8, .NET 4.8, C# 7.3; one public class per file.
-// - Namespace MUST be Standalone.Strategies; Class name MUST equal file name.
+// TARGET: NinjaTrader 8 (.NET 4.8, C# 7.3). One public class per file.
+// NAMESPACE: Standalone.Strategies ; CLASS NAME must equal FILE NAME.
 //
-// Replace <StrategyName> before use.
+// ********* CRITICAL, IMMUTABLE RULE *********
+// High-Water Mark (HWM) & BREACH markers are keyed **PER-ACCOUNT ONLY**.
+// DO NOT include instrument or strategy name in the persistence key.
+// This is a hard requirement and part of the IMMUTABLE plumbing.
+// ********************************************
+//
+// Replace <StrategyName> before use. Only edit inside the ENTRY region.
 
 #region Using declarations
 using System;
@@ -87,7 +90,7 @@ private void Dx_Init()
     _runId = DateTime.UtcNow.ToString("yyyyMMddTHHmmssZ");
     _stratName = Name;
     _symbol = Instrument != null ? Instrument.FullName : "<unknown>";
-    _accountName = Account != null ? Account.Name : "<none>";
+    try { _accountName = Account != null ? Account.Name : "<none>"; } catch { _accountName = "<none>"; }
     _tf = BarsPeriod.BarsPeriodType + ":" + BarsPeriod.Value;
 
     if (EnableJsonTelemetry)
@@ -229,105 +232,111 @@ public bool EnableShorts { get; set; } = true;
 [NinjaScriptProperty, Display(Name="Session Window", GroupName="Filters", Order=10, Description="Format HH:mm–HH:mm, local time")]
 public string SessionWindow { get; set; } = "";
 
-[NinjaScriptProperty, Display(Name="Cooldown Bars", GroupName="Filters", Order=11)]
-[Range(0, 500)]
-public int CooldownBars { get; set; } = 0;
-
-[NinjaScriptProperty, Display(Name="Max Trades / Day", GroupName="Filters", Order=12)]
-[Range(0, 100)]
-public int MaxTradesPerDay { get; set; } = 99;
-
-[NinjaScriptProperty, Display(Name="Consec Loss Lockout", GroupName="Filters", Order=13, Description="Pause after N consecutive losing trades")]
-[Range(0, 20)]
-public int ConsecLossLockout { get; set; } = 0;
-
-[NinjaScriptProperty, Display(Name="Pause After Win", GroupName="Filters", Order=14)]
-public bool PauseAfterWin { get; set; } = false;
-
-// --- Session cutoff / auto-flat ---
-[NinjaScriptProperty, Display(Name="SessionCutoffTime (HH:mm)", GroupName="Filters", Order=15, Description="After this time, no new entries. If AutoFlatAtClose=true, flatten at/after cutoff.")]
+// Cutoff / auto-flat
+[NinjaScriptProperty, Display(Name="SessionCutoffTime (HH:mm)", GroupName="Filters", Order=15)]
 public string SessionCutoffTime { get; set; } = "";
 
 [NinjaScriptProperty, Display(Name="AutoFlatAtClose", GroupName="Filters", Order=16)]
 public bool AutoFlatAtClose { get; set; } = true;
 
-[NinjaScriptProperty, Display(Name="RiskProfile", GroupName="Risk", Order=20)]
+[NinjaScriptProperty, Display(Name="Cooldown Bars", GroupName="Filters", Order=17)]
+[Range(0, 500)]
+public int CooldownBars { get; set; } = 0;
+
+[NinjaScriptProperty, Display(Name="Max Trades / Day", GroupName="Filters", Order=18)]
+[Range(0, 100)]
+public int MaxTradesPerDay { get; set; } = 99;
+
+[NinjaScriptProperty, Display(Name="Consec Loss Lockout", GroupName="Filters", Order=19)]
+[Range(0, 20)]
+public int ConsecLossLockout { get; set; } = 0;
+
+[NinjaScriptProperty, Display(Name="Pause After Win", GroupName="Filters", Order=20)]
+public bool PauseAfterWin { get; set; } = false;
+
+// Risk core
+[NinjaScriptProperty, Display(Name="RiskProfile", GroupName="Risk", Order=30)]
 public RiskProfile RiskProfileMode { get; set; } = RiskProfile.DCP;
 
-[NinjaScriptProperty, Display(Name="PositionSizingMode", GroupName="Risk", Order=21)]
+[NinjaScriptProperty, Display(Name="PositionSizingMode", GroupName="Risk", Order=31)]
 public PositionSizingMode SizingMode { get; set; } = PositionSizingMode.FixedContracts;
 
-[NinjaScriptProperty, Display(Name="DefaultQuantity", GroupName="Risk", Order=22), Range(1, 100)]
+[NinjaScriptProperty, Display(Name="DefaultQuantity", GroupName="Risk", Order=32), Range(1, 100)]
 public int DefaultQuantity { get; set; } = 1;
 
-[NinjaScriptProperty, Display(Name="AccountEquityEstimate ($)", GroupName="Risk", Order=23), Range(0, double.MaxValue)]
+[NinjaScriptProperty, Display(Name="AccountEquityEstimate ($)", GroupName="Risk", Order=33), Range(0, double.MaxValue)]
 public double AccountEquityEstimate { get; set; } = 50000;
 
-[NinjaScriptProperty, Display(Name="RiskPerTrade ($ or %)", GroupName="Risk", Order=24), Range(0, 100000)]
+[NinjaScriptProperty, Display(Name="RiskPerTrade ($ or %)", GroupName="Risk", Order=34), Range(0, 100000)]
 public double RiskPerTrade { get; set; } = 250;
 
-[NinjaScriptProperty, Display(Name="EntryRiskMode", GroupName="Risk", Order=25)]
+[NinjaScriptProperty, Display(Name="EntryRiskMode", GroupName="Risk", Order=35)]
 public EntryRiskMode EntryRisk { get; set; } = EntryRiskMode.StopTicks;
 
-[NinjaScriptProperty, Display(Name="Stop (ticks)", GroupName="Risk", Order=26), Range(1, 500)]
+[NinjaScriptProperty, Display(Name="Stop (ticks)", GroupName="Risk", Order=36), Range(1, 500)]
 public int StopTicks { get; set; } = 40;
 
-[NinjaScriptProperty, Display(Name="ATR Period", GroupName="Risk", Order=27), Range(5, 200)]
+[NinjaScriptProperty, Display(Name="ATR Period", GroupName="Risk", Order=37), Range(5, 200)]
 public int ATRPeriod { get; set; } = 14;
 
-[NinjaScriptProperty, Display(Name="ATR Mult (x)", GroupName="Risk", Order=28), Range(0.1, 20)]
+[NinjaScriptProperty, Display(Name="ATR Mult (x)", GroupName="Risk", Order=38), Range(0.1, 20)]
 public double ATRMult { get; set; } = 1.0;
 
-// --- Persist High-Water Mark (Prop trailing DD) ---
-[NinjaScriptProperty, Display(Name="PersistHWM", GroupName="Risk", Order=29, Description="If true, save/load persistent equity high-water mark to survive restarts.")]
+// Persistent High-Water Mark (Prop trailing DD) — PER-ACCOUNT ONLY
+[NinjaScriptProperty, Display(Name="PersistHWM", GroupName="Risk", Order=39)]
 public bool PersistHWM { get; set; } = true;
 
-[NinjaScriptProperty, Display(Name="HWMFilePath", GroupName="Risk", Order=30, Description="Path to persist HWM (per strategy+instrument).")]
+[NinjaScriptProperty, Display(Name="HWMFilePath", GroupName="Risk", Order=40, Description="Files are keyed PER-ACCOUNT ONLY.")]
 public string HWMFilePath { get; set; } =
     Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments)
     + System.IO.Path.DirectorySeparatorChar + "NinjaTrader 8"
     + System.IO.Path.DirectorySeparatorChar + "log"
     + System.IO.Path.DirectorySeparatorChar + "StrategyHWM";
 
-[NinjaScriptProperty, Display(Name="BE at R (x)", GroupName="Exits", Order=40), Range(0.0, 10.0)]
+// Exits
+[NinjaScriptProperty, Display(Name="BE at R (x)", GroupName="Exits", Order=50), Range(0.0, 10.0)]
 public double BreakEvenAtR { get; set; } = 1.0;
 
-[NinjaScriptProperty, Display(Name="BE Plus (ticks)", GroupName="Exits", Order=41), Range(0, 50)]
+[NinjaScriptProperty, Display(Name="BE Plus (ticks)", GroupName="Exits", Order=51), Range(0, 50)]
 public int BEPlusTicks { get; set; } = 0;
 
-[NinjaScriptProperty, Display(Name="TP1 @ R (x)", GroupName="Exits", Order=42), Range(0.1, 20)]
+[NinjaScriptProperty, Display(Name="TP1 @ R (x)", GroupName="Exits", Order=52), Range(0.1, 20)]
 public double TP1_RMultiple { get; set; } = 1.0;
 
-[NinjaScriptProperty, Display(Name="TP1 %", GroupName="Exits", Order=43), Range(0, 100)]
+[NinjaScriptProperty, Display(Name="TP1 %", GroupName="Exits", Order=53), Range(0, 100)]
 public int TP1_Pct { get; set; } = 50;
 
-[NinjaScriptProperty, Display(Name="TP2 @ R (x)", GroupName="Exits", Order=44), Range(0.1, 20)]
+[NinjaScriptProperty, Display(Name="TP2 @ R (x)", GroupName="Exits", Order=54), Range(0.1, 20)]
 public double TP2_RMultiple { get; set; } = 2.0;
 
-[NinjaScriptProperty, Display(Name="TP2 %", GroupName="Exits", Order=45), Range(0, 100)]
+[NinjaScriptProperty, Display(Name="TP2 %", GroupName="Exits", Order=55), Range(0, 100)]
 public int TP2_Pct { get; set; } = 25;
 
-[NinjaScriptProperty, Display(Name="Trail Start @ R (x)", GroupName="Exits", Order=46), Range(0.0, 20)]
+[NinjaScriptProperty, Display(Name="Trail Start @ R (x)", GroupName="Exits", Order=56), Range(0.0, 20)]
 public double TP3_TrailingStartR { get; set; } = 2.0;
 
-[NinjaScriptProperty, Display(Name="TP3 % (Trail)", GroupName="Exits", Order=47), Range(0, 100)]
+[NinjaScriptProperty, Display(Name="TP3 % (Trail)", GroupName="Exits", Order=57), Range(0, 100)]
 public int TP3_Pct { get; set; } = 25;
 
-[NinjaScriptProperty, Display(Name="Trail Type", GroupName="Exits", Order=48)]
+[NinjaScriptProperty, Display(Name="Trail Type", GroupName="Exits", Order=58)]
 public TrailType TrailMode { get; set; } = TrailType.Ticks;
 
-[NinjaScriptProperty, Display(Name="Trail (ticks)", GroupName="Exits", Order=49), Range(1, 500)]
+[NinjaScriptProperty, Display(Name="Trail (ticks)", GroupName="Exits", Order=59), Range(1, 500)]
 public int TrailTicks { get; set; } = 30;
 
-[NinjaScriptProperty, Display(Name="Trail ATR Mult (x)", GroupName="Exits", Order=50), Range(0.1, 20)]
+[NinjaScriptProperty, Display(Name="Trail ATR Mult (x)", GroupName="Exits", Order=60), Range(0.1, 20)]
 public double TrailATRMult { get; set; } = 1.0;
 
-// --- Failsafes ---
-[NinjaScriptProperty, Display(Name="FlattenOnDisconnect", GroupName="Failsafes", Order=60)]
+// Failsafes
+[NinjaScriptProperty, Display(Name="FlattenOnDisconnect", GroupName="Failsafes", Order=70)]
 public bool FlattenOnDisconnect { get; set; } = true;
 
-[NinjaScriptProperty, Display(Name="ProtectOnStopReject", GroupName="Failsafes", Order=61)]
+[NinjaScriptProperty, Display(Name="ProtectOnStopReject", GroupName="Failsafes", Order=71)]
 public bool ProtectOnStopReject { get; set; } = true;
+
+// Toggle: start next session in lockout once per breach
+[NinjaScriptProperty, Display(Name="StartNextSessionLockoutOnBreach", GroupName="Failsafes", Order=72)]
+public bool StartNextSessionLockoutOnBreach { get; set; } = true;
 #endregion
 
 #region RTM Internals
@@ -353,10 +362,28 @@ private double _hwmEquity = 0;
 // Lockout timer and optional session cutoff
 private DateTime _lockoutUntil = DateTime.MinValue;
 private TimeSpan? _cutoffTs = null;
-// Prior-breach flag (persisted)
+// Prior-breach flag (for next-session lockout)
 private bool _breachFlag = false;
 
 private NinjaTrader.NinjaScript.Indicators.ATR _atr;
+#endregion
+
+#region RTM Helpers (PER-ACCOUNT file stem)
+private static string Sanitize(string s)
+{
+    if (string.IsNullOrEmpty(s)) return "NA";
+    foreach (var c in System.IO.Path.GetInvalidFileNameChars())
+        s = s.Replace(c, '_');
+    return s;
+}
+
+private string RTM_FileStem()
+{
+    // ***** PER-ACCOUNT ONLY ***** — DO NOT change to include instrument or strategy
+    string acct = "<BACKTEST>";
+    try { if (Account != null && !string.IsNullOrEmpty(Account.Name)) acct = Account.Name; } catch { }
+    return Sanitize(acct);
+}
 #endregion
 
 #region RTM Life-cycle Hooks
@@ -384,7 +411,7 @@ private void RTM_OnStateChange()
             Print($"[CFG] [{Name}] normalized TP pct: {TP1_Pct}/{TP2_Pct}/{TP3_Pct}");
         }
 
-        // HWM init & optional load
+        // HWM init & optional load (PER-ACCOUNT ONLY)
         try
         {
             var eq = Account != null ? Account.Get(AccountItem.NetLiquidation, Currency.UsDollar) : AccountEquityEstimate;
@@ -394,7 +421,9 @@ private void RTM_OnStateChange()
             {
                 if (!System.IO.Directory.Exists(HWMFilePath))
                     System.IO.Directory.CreateDirectory(HWMFilePath);
-                var fn = System.IO.Path.Combine(HWMFilePath, $"{Name}_{Instrument?.FullName}_HWM.txt");
+
+                var stem = RTM_FileStem();
+                var fn = System.IO.Path.Combine(HWMFilePath, stem + "_HWM.txt");
                 if (System.IO.File.Exists(fn))
                 {
                     var text = System.IO.File.ReadAllText(fn).Trim();
@@ -402,9 +431,9 @@ private void RTM_OnStateChange()
                     if (double.TryParse(text, out saved) && saved > 0)
                         _hwmEquity = Math.Max(_hwmEquity, saved);
                 }
-                // prior breach flag
-                var bf = System.IO.Path.Combine(HWMFilePath, $"{Name}_{Instrument?.FullName}_BREACH.txt");
-                if (System.IO.File.Exists(bf))
+
+                var bf = System.IO.Path.Combine(HWMFilePath, stem + "_BREACH.txt");
+                if (StartNextSessionLockoutOnBreach && System.IO.File.Exists(bf))
                 {
                     _breachFlag = true;
                 }
@@ -617,7 +646,8 @@ private void RTM_SaveHWMIfNeeded(double equity)
             {
                 if (!System.IO.Directory.Exists(HWMFilePath))
                     System.IO.Directory.CreateDirectory(HWMFilePath);
-                var fn = System.IO.Path.Combine(HWMFilePath, $"{Name}_{Instrument?.FullName}_HWM.txt");
+                var stem = RTM_FileStem();
+                var fn = System.IO.Path.Combine(HWMFilePath, stem + "_HWM.txt");
                 System.IO.File.WriteAllText(fn, _hwmEquity.ToString("F2"));
             } catch { }
         }
@@ -675,7 +705,7 @@ private void RTM_SaveHWMIfNeeded(double equity)
                 return;
             }
 
-            // Trailing DD & CircuitBreaker vs PERSISTENT HWM
+            // Trailing DD & CircuitBreaker vs PERSISTENT HWM (PER ACCOUNT ONLY)
             if (UseRiskManager && Account != null)
             {
                 var equity = Account.Get(AccountItem.NetLiquidation, Currency.UsDollar);
@@ -688,14 +718,19 @@ private void RTM_SaveHWMIfNeeded(double equity)
                     else if (Position.MarketPosition == MarketPosition.Short) ExitShort();
 
                     _lockoutUntil = Time[0].AddMinutes(LockoutMinutes);
-                    // Persist breach flag
-                    _breachFlag = true;
-                    try
+
+                    // Persist next-session lockout flag (PER ACCOUNT ONLY) if toggle is on
+                    if (StartNextSessionLockoutOnBreach && PersistHWM)
                     {
-                        if (!System.IO.Directory.Exists(HWMFilePath))
-                            System.IO.Directory.CreateDirectory(HWMFilePath);
-                        System.IO.File.WriteAllText(System.IO.Path.Combine(HWMFilePath, $"{Name}_{Instrument?.FullName}_BREACH.txt"), DateTime.UtcNow.ToString("o"));
-                    } catch { }
+                        try
+                        {
+                            if (!System.IO.Directory.Exists(HWMFilePath))
+                                System.IO.Directory.CreateDirectory(HWMFilePath);
+                            var stem = RTM_FileStem();
+                            System.IO.File.WriteAllText(System.IO.Path.Combine(HWMFilePath, stem + "_BREACH.txt"), DateTime.UtcNow.ToString("o"));
+                        } catch { }
+                    }
+
                     Dx_Log("RISK", $"breach=1 type={(draw >= PropTrailingDD ? "PropDD":"CircuitBreaker")} draw={draw:F2} hwm={_hwmEquity:F2} eq={equity:F2} lockoutMin={LockoutMinutes}");
                     return;
                 }
@@ -708,12 +743,20 @@ private void RTM_SaveHWMIfNeeded(double equity)
                 return;
             }
 
-            // Apply prior-breach start-of-session lockout once
-            if (_breachFlag)
+            // Apply prior-breach start-of-session lockout once (and clear marker)
+            if (_breachFlag && StartNextSessionLockoutOnBreach)
             {
-                _breachFlag = false; // apply once; comment to persist lockout across sessions
+                _breachFlag = false; // apply once
                 _lockoutUntil = Time[0].AddMinutes(LockoutMinutes);
                 Dx_Log("RISK", $"start_lockout=1 reason=PriorBreach lockoutMin={LockoutMinutes}");
+
+                // remove marker so it's "once per breach"
+                try
+                {
+                    var stem = RTM_FileStem();
+                    var bf = System.IO.Path.Combine(HWMFilePath, stem + "_BREACH.txt");
+                    if (System.IO.File.Exists(bf)) System.IO.File.Delete(bf);
+                } catch { }
                 return;
             }
 
