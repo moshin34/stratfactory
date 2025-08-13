@@ -791,7 +791,6 @@ private void RTM_SaveHWMIfNeeded(double equity)
         #region StateMachine
         private enum SMState { IDLE, ARMED, TRIGGERED, ADDON, LOCKOUT }
         private SMState _state = SMState.IDLE;
-        private int _tradesToday;
         private bool _longAttemptLive;
         private bool _shortAttemptLive;
         private bool _addonLongUsed;
@@ -1040,12 +1039,12 @@ private void RTM_SaveHWMIfNeeded(double equity)
         {
             RTM_OnExecutionUpdate(execution, order);
 
-            if (order != null && order.Name == "ENTRY" && execution.OrderState == OrderState.Filled)
+            if (order != null && order.Name == "ENTRY" && order.OrderState == OrderState.Filled)
             {
                 _tradesToday++;
             }
 
-            if (execution != null && order != null && order.Name != null && order.Name.ToUpper().Contains("STOP") && execution.OrderState == OrderState.Filled)
+            if (order != null && order.Name != null && order.Name.ToUpper().Contains("STOP") && order.OrderState == OrderState.Filled)
             {
                 _coolOffUntil = Time[0].AddMinutes(15);
             }
