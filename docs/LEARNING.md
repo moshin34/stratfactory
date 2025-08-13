@@ -1,12 +1,11 @@
-# LEARNING: Prevent Repeat Compile Errors
+# LEARNING — Compile Error Loop
 
-1) When NT8 compile fails, copy the full compiler output into `knowledge/errors.log` (append at bottom).
-2) When asking Codex to fix, include:
-   - The full current `.cs` file
-   - The exact error text from `knowledge/errors.log`
-   - Optionally paste relevant bullets from `knowledge/known_fixes.md`
-3) Ask Codex: “Return the complete corrected `.cs` file and do not change IMMUTABLE regions.”
+1) Compile in NinjaTrader 8.
+2) If errors occur, copy the entire compiler output into knowledge/errors.log (append).
+3) Open prompts/codex_fix_prompt.md and paste:
+   - The current .cs (full text)
+   - The error text
+   - Optionally a few bullets from known_fixes.md
+4) Submit to Codex, replace file, compile again.
 
-Notes:
-- NT8 compiles all scripts in one batch; a typo elsewhere can break your new file.
-- Always ensure namespace == `Standalone.Strategies` and class name == file name.
+Over time, errors.log + known_fixes.md become a memory bank to reduce repeat issues.

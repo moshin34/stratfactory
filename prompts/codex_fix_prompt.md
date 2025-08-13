@@ -1,17 +1,17 @@
-# Codex Prompt — Fix Compile Errors (Keep IMMUTABLE Blocks Intact)
+# Codex Prompt — Fix Compile Errors (Use repo template + NT docs)
 
 You are an expert NinjaTrader 8 NinjaScript developer.
-Use: https://developer.ninjatrader.com/docs/desktop and docs/NT8_COMPILE_TARGET.md
+**Reference:** https://developer.ninjatrader.com/docs/desktop and this repo's docs/NT8_COMPILE_TARGET.md
 
 Task:
-- Fix compile errors in the provided single-file strategy.
-- Preserve the IMMUTABLE Diagnostics + RTM blocks unless the error explicitly points inside them.
-- Keep namespace/class name/attributes intact.
+A single-file strategy failed to compile. Fix the code while preserving IMMUTABLE Diagnostics/RTM regions
+to match https://raw.githubusercontent.com/moshin34/stratfactory/main/templates/StrategyTemplate.cs.txt exactly.
+Maintain namespace/class name/attributes and NT8 constraints.
 
 Deliverable:
-- Return ONLY the full corrected `.cs` in ```csharp``` fencing. No explanations.
+Return ONLY the full corrected `.cs` within ```csharp``` fencing, no explanations.
 
-Context to include:
-- CURRENT FILE: paste full `.cs`
-- ERRORS: paste full compiler output (also added to knowledge/errors.log)
-- KNOWN FIXES (optional): paste relevant bullets from knowledge/known_fixes.md
+Paste below:
+1) CURRENT FILE
+2) COMPILER ERRORS (from knowledge/errors.log)
+(Optionally paste bullets from knowledge/known_fixes.md at the top.)

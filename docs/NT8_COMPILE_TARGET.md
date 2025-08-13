@@ -1,12 +1,15 @@
-# NinjaTrader 8 Compile Target (Quick Reference)
+# NT8 COMPILE TARGET
 
-Authoritative docs: https://developer.ninjatrader.com/docs/desktop
-
-Framework: .NET 4.8
-Language: C# 7.3 (no records/init/modern pattern matching/async/dynamic)
-Compiler: NT8 internal CSharpCodeProvider
-
-One class per file. Strategies in `NinjaTrader.NinjaScript.Strategies`. Indicators in `NinjaTrader.NinjaScript.Indicators`.
-Mandatory methods: OnStateChange(), OnBarUpdate(), OnOrderUpdate(Order), OnExecutionUpdate(Execution, Order).
-
-Avoid: threading, dynamic, heavy LINQ in OnBarUpdate, reflection.
+- Target Framework: .NET Framework 4.8
+- C# Language: 7.3 (avoid records/init/newer pattern matching)
+- Exactly one public class per file; derives from Strategy
+- Use namespaces:
+  - using NinjaTrader.NinjaScript;
+  - using NinjaTrader.NinjaScript.Strategies;
+  - using NinjaTrader.NinjaScript.Indicators;
+  - using NinjaTrader.Cbi;
+  - using NinjaTrader.Data;
+  - using System.ComponentModel.DataAnnotations;
+- No NuGet/external DLLs (except what NT8 already loads)
+- No async/await/dynamic/records/init; avoid threading
+- Use State model: SetDefaults, Configure, DataLoaded, etc.

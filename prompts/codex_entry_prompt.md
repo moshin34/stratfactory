@@ -1,23 +1,26 @@
-# Codex Prompt — Generate Standalone NinjaScript Strategy (Template in Repo)
+# Codex Prompt — Entry-Only (Fetch template from repo)
 
 You are an expert NinjaTrader 8 NinjaScript developer.
-Use the official docs as needed: https://developer.ninjatrader.com/docs/desktop
-Follow repo compile constraints: docs/NT8_COMPILE_TARGET.md
+**Use and follow the official docs:** https://developer.ninjatrader.com/docs/desktop
 
-Instructions:
-1) Fetch the latest template from this repo at: <RAW_URL_TO>/templates/StrategyTemplate.cs.txt
-2) Replace <StrategyName> with the given strategy name.
-3) Edit ONLY between these markers:
+Goal:
+Return a single C# strategy file that compiles in NinjaTrader 8 (.NET 4.8, C# 7.3).
+The template lives in this repo and contains IMMUTABLE Diagnostics + RTM. 
+Fetch it from:
+https://raw.githubusercontent.com/moshin34/stratfactory/main/templates/StrategyTemplate.cs.txt
+
+You ONLY implement ENTRY logic between these markers:
 //== BEGIN ENTRY LOGIC (EDITABLE) ==
 //== END ENTRY LOGIC (EDITABLE) ==
-4) Do not modify or remove the IMMUTABLE blocks (Diagnostics + RTM).
-5) Respect NT8 constraints (C# 7.3, .NET 4.8, one class per file).
-6) Use only built-in NinjaTrader indicators/APIs.
-7) Expose any entry-specific parameters with [NinjaScriptProperty], [Display] (include units), and [Range].
-8) Return ONLY the full `.cs` file, fenced in ```csharp.
 
-Inputs you will receive from me now:
-- StrategyName: <fill me>
-- SPEC (entry-only): paste below
+Constraints (also see docs/NT8_COMPILE_TARGET.md):
+- Namespace: Standalone.Strategies; Class name == file name.
+- Do NOT modify IMMUTABLE regions.
+- Managed orders only; exits/stops handled by RTM.
+- Add entry parameters with [NinjaScriptProperty], [Display] (with units), [Range].
+- Respect lockout (no entries during CircuitBreaker/PropDD lockout).
 
-## SPEC
+Deliverable:
+Return ONLY the full `.cs` in ```csharp``` fencing. No explanations.
+
+Now generate a strategy named {StrategyName} using the SPEC below.

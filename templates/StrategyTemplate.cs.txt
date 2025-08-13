@@ -590,7 +590,7 @@ private void ExitFromPositionLimit(int qty, double price, string signalName)
 
 //== BEGIN ENTRY LOGIC (EDITABLE) ==
 // Codex: implement entry-only logic here.
-// Example (replace):
+// Example (replace): 
 // if (CrossAbove(EMA(9), EMA(21), 1)) RTM_ArmEntryLong(Close[0]);
 // if (CrossBelow(EMA(9), EMA(21), 1)) RTM_ArmEntryShort(Close[0]);
 //== END ENTRY LOGIC (EDITABLE) ==
