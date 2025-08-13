@@ -1,0 +1,3 @@
+NinjaScript File,Error,Code,Line,Column,
+AVR_Asia_SingleFile.cs,'AVR_Asia_SingleFile.OnOrderUpdate(Order double double int int double OrderState DateTime)': no suitable method found to override,CS0115,1062,30,
+AVR_Asia_SingleFile.cs,The name 'order' does not exist in the current context,CS0103,1041,38,
