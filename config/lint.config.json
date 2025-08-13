@@ -1,0 +1,21 @@
+{
+  "expected_namespace": "Standalone.Strategies",
+  "allow_namespaces": [
+    "Standalone.Strategies",
+    "NinjaTrader.NinjaScript.Strategies"
+  ],
+  "banned_tokens": [
+    "async ",
+    "await ",
+    " Task<",
+    "System.Threading",
+    " Thread",
+    " dynamic ",
+    " record ",
+    " init ",
+    "System.Reflection"
+  ],
+  "max_public_classes_per_file": 1,
+  "enforce_single_class": true,
+  "check_public_fields": true
+}

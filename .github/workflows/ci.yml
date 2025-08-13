@@ -1,0 +1,21 @@
+name: nt8-ci
+
+on:
+  pull_request:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  lint-and-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Lint (NT8 rules)
+        run: |
+          python tools/nt8_lint.py
+      - name: Immutable guard (template regions)
+        run: |
+          python tools/nt8_guard.py
